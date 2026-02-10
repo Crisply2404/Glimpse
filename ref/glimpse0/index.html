@@ -1,0 +1,50 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Glimpse - Rediscover Your Memories</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+      @keyframes float {
+        0% { transform: translateY(0px); }
+        50% { transform: translateY(-10px); }
+        100% { transform: translateY(0px); }
+      }
+      .animate-float { animation: float 3s ease-in-out infinite; }
+      
+      @keyframes gacha-shake {
+        0%, 100% { transform: translateX(0); }
+        25% { transform: translateX(-5px) rotate(-1deg); }
+        75% { transform: translateX(5px) rotate(1deg); }
+      }
+      .animate-shake { animation: gacha-shake 0.2s ease-in-out infinite; }
+
+      @keyframes drop-in {
+        0% { transform: translateY(-200%) scale(0.5); opacity: 0; }
+        70% { transform: translateY(20%) scale(1.05); opacity: 1; }
+        100% { transform: translateY(0) scale(1); opacity: 1; }
+      }
+      .animate-drop { animation: drop-in 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+      /* Smooth Transitions */
+      .transition-all-300 { transition: all 0.3s ease; }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "react": "https://esm.sh/react@^19.2.4"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 transition-colors duration-300">
+    <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
