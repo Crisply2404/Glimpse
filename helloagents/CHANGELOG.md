@@ -16,6 +16,7 @@
 - 类型检查不再扫描 `ref/`（避免把原型目录当成主项目源码）
 - 处理开发环境控制台噪音：内置 favicon（不再请求 `/favicon.ico` 404），并在根布局加 `suppressHydrationWarning`（避免部分浏览器扩展导致的 hydration 警告）
 - OpenAI Base URL 更兼容：`OPENAI_BASE_URL` 既支持填根地址，也支持填到 `/v1`（不会重复拼接）
+- Reasoning Stream 动画幅度减小：卡片出现时不再被滚动容器裁剪
 - 搜索更稳：默认用 Tavily `advanced` 深度，并扩大提炼候选时可见的网页命中数（更不容易漏掉真目标）
 
 ## [0.1.0] - 2026-02-10
