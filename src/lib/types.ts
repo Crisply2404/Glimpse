@@ -12,6 +12,11 @@ export type RecallOptions = {
   maxSearchResultsPerQuery?: number;
   maxQueries?: number;
   maxCandidates?: number;
+  /**
+   * 是否对 Top 候选做“补证据”（例如补 App Store/Google Play）。
+   * 默认 false：避免额外搜索次数太多。
+   */
+  enrichEvidence?: boolean;
 };
 
 export type RecallRequest = {
@@ -40,6 +45,7 @@ export type ScoreBreakdownItem = {
   delta: number;
   reason: string;
   evidenceUrl?: string;
+  evidenceQuote?: string;
 };
 
 export type Candidate = {

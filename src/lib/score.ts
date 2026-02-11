@@ -28,14 +28,6 @@ export function heuristicScoreCandidate(args: {
         delta,
         reason: `在证据摘要里能看到“${clampText(c.text, 30)}”相关内容。`,
       });
-    } else if (c.polarity === "negative") {
-      // 负向线索没命中，略微加分（说明没撞到“排除项”）
-      score += 2;
-      breakdown.push({
-        clue: `不是：${c.text}`,
-        delta: 2,
-        reason: `证据里没有明显出现你要排除的“${clampText(c.text, 30)}”。`,
-      });
     }
   }
 
@@ -59,4 +51,3 @@ export function flattenEvidenceText(candidate: Candidate, maxLen = 1600) {
     .trim();
   return text.length <= maxLen ? text : `${text.slice(0, maxLen - 1)}…`;
 }
-

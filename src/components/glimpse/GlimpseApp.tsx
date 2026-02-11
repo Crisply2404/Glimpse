@@ -56,6 +56,7 @@ function mapBackendToUiCandidates(res: RecallResponse): UiCandidate[] {
     id: c.id,
     name: c.name,
     icon: c.imageUrl ?? iconForCandidate(c.id, c.name),
+    iconSourceUrl: c.imageSourceUrl,
     totalScore: c.score,
     isEliminated: false,
     breakdown: (c.scoreBreakdown ?? []).map((b) => ({
@@ -63,6 +64,7 @@ function mapBackendToUiCandidates(res: RecallResponse): UiCandidate[] {
       scoreChange: b.delta,
       reason: b.reason,
       link: b.evidenceUrl,
+      quote: b.evidenceQuote,
     })),
     evidence: (c.evidence ?? []).map((e) => ({
       title: e.title ?? "来源",

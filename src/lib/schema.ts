@@ -15,6 +15,7 @@ const optionsSchema = z
     maxSearchResultsPerQuery: z.number().int().min(3).max(15).optional(),
     maxQueries: z.number().int().min(1).max(8).optional(),
     maxCandidates: z.number().int().min(5).max(40).optional(),
+    enrichEvidence: z.boolean().optional(),
   })
   .optional();
 
@@ -27,4 +28,3 @@ const recallRequestSchema = z.object({
 export function parseRecallRequest(input: unknown): RecallRequest {
   return recallRequestSchema.parse(input);
 }
-

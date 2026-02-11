@@ -14,6 +14,10 @@ export function cleanupCandidateName(raw: string) {
     .trim()
     .replace(/\s+/g, " ")
     .replace(/[™®]/g, "")
+    .replace(/\s*-\s*apps\s+on\s+google\s+play\b.*$/i, "")
+    .replace(/\s*-\s*google\s+play\b.*$/i, "")
+    .replace(/\s*-\s*app\s+store\b.*$/i, "")
+    .replace(/\s+on\s+(steam|the app store|app store|google play)\b.*$/i, "")
     .replace(/\s*-\s*(steam|wikipedia|wiki|ign|fandom|gamefaqs|metacritic|youtube).*$/i, "")
     .replace(/\s*\(.*?\)\s*$/g, "")
     .trim();
@@ -21,6 +25,7 @@ export function cleanupCandidateName(raw: string) {
 
 export function normalizeCandidateKey(name: string) {
   return normalizeTitle(cleanupCandidateName(name))
+    .replace(/\+/g, " plus ")
     .replace(/[^a-z0-9\u4e00-\u9fff: ]+/g, "")
     .replace(/\s+/g, " ")
     .trim();

@@ -31,6 +31,17 @@ export default function Results({ candidates, revealedIds }: ResultsProps) {
                 className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent"></div>
+              {game.iconSourceUrl ? (
+                <a
+                  href={game.iconSourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="absolute top-4 left-4 bg-zinc-900/80 backdrop-blur-md border border-white/20 text-white text-[10px] font-bold px-2 py-1 rounded-full hover:bg-zinc-900/90"
+                  title="图片来源"
+                >
+                  图源
+                </a>
+              ) : null}
               <div className="absolute bottom-4 left-4 right-4">
                 <div className="bg-indigo-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mb-1">
                   RANK #{index + 1}
@@ -63,17 +74,29 @@ export default function Results({ candidates, revealedIds }: ResultsProps) {
                       <div className="flex-1">
                         <span className="font-semibold">{item.clueText}: </span>
                         <span className="text-zinc-500 dark:text-zinc-400">{item.reason}</span>
-                        {item.link ? (
-                          <div className="mt-1">
-                            <a
-                              href={item.link}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
-                            >
-                              证据链接
-                            </a>
-                          </div>
+                        {item.link || item.quote ? (
+                          <details className="mt-1">
+                            <summary className="cursor-pointer text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline select-none">
+                              看证据
+                            </summary>
+                            {item.quote ? (
+                              <div className="mt-1 text-[10px] text-zinc-500 dark:text-zinc-400 bg-white/60 dark:bg-zinc-950/30 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2">
+                                “{item.quote}”
+                              </div>
+                            ) : (
+                              <div className="mt-1 text-[10px] text-zinc-400">（没有可引用的原文片段）</div>
+                            )}
+                            {item.link ? (
+                              <a
+                                href={item.link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-block mt-2 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                              >
+                                打开来源
+                              </a>
+                            ) : null}
+                          </details>
                         ) : null}
                       </div>
                     </li>
@@ -112,4 +135,3 @@ export default function Results({ candidates, revealedIds }: ResultsProps) {
     </div>
   );
 }
-

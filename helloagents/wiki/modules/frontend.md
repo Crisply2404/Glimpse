@@ -37,8 +37,19 @@
 2. 后端返回 `events` + `candidates`
 3. 前端按 `events` 顺序逐条“回放”（带延迟），让用户看见搜索/提炼/筛选/扭蛋每一步
 4. 遇到 `filter` 阶段 → 把被淘汰的候选置灰（像过关淘汰）
-5. 到 `gacha` 阶段 → 扭蛋机按排名逐个掉出 Top5，同时结果卡片展示证据链接
+5. 到 `gacha` 阶段 → 扭蛋机按排名逐个掉出 Top5，同时结果卡片展示证据（可点开看“原文片段”）
+
+## 证据展示（用户能看懂的那种）
+- **打分理由**：每条理由都支持点开“看证据”，里面会展示：
+  - 原文片段（从网页摘要里截出来的那一小段）
+  - 来源链接（点一下就能打开原网页）
+- **配图**：候选卡片左上角有“图源”，点开能看到图片来自哪个网页（防止“图片瞎配”）
+
+## UI 注意事项
+- Reasoning Stream 的卡片动画做了收敛，并给滚动容器留了内边距，避免“卡片跳出来被裁剪”
 
 ## 变更历史
 - [202602100240_glimpse_game_demo](../../history/2026-02/202602100240_glimpse_game_demo/) - Demo 页面与对接数据结构落地
 - [202602101831_frontend_prototype_integration](../../history/2026-02/202602101831_frontend_prototype_integration/) - 接入 AIStudio 原型 UI（筛选动画 + 扭蛋掉落 + 证据卡片）
+- [202602110229_recall_quality_upgrade](../../history/2026-02/202602110229_recall_quality_upgrade/) - 证据可点开看原文 + 图源展示 + Reasoning Stream 防裁剪
+- [202602111625_non_game_filter_no_autosearch](../../history/2026-02/202602111625_non_game_filter_no_autosearch/) - Reasoning Stream 动画/布局收敛（减少“跳出来被裁剪”）

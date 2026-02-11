@@ -12,8 +12,8 @@ export default function Visualizer({ events, candidates, currentPhase }: Visuali
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
       {/* Event Timeline */}
-      <div className="lg:col-span-1 flex flex-col gap-4 overflow-y-auto max-h-[500px] pr-2 custom-scrollbar">
-        <h3 className="text-sm font-bold uppercase text-zinc-400 mb-2 sticky top-0 bg-white dark:bg-zinc-950 py-1">
+      <div className="lg:col-span-1 flex flex-col gap-4 overflow-y-auto max-h-[500px] px-3 py-3 custom-scrollbar">
+        <h3 className="text-sm font-bold uppercase text-zinc-400 mb-2 sticky top-0 bg-white dark:bg-zinc-950 py-2">
           Reasoning Stream
         </h3>
         {events.length === 0 ? (
@@ -25,10 +25,10 @@ export default function Visualizer({ events, candidates, currentPhase }: Visuali
         {[...events].reverse().map((event, idx) => (
           <div
             key={event.id}
-            className={`p-4 rounded-xl border-l-4 transition-all-300 transform animate-drop ${
+            className={`p-4 rounded-xl border-l-4 transition-all-300 animate-drop ${
               idx === 0
-                ? "bg-indigo-50 dark:bg-indigo-900/20 border-indigo-500 scale-100 shadow-md"
-                : "bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 scale-95 opacity-60"
+                ? "bg-indigo-50 dark:bg-indigo-900/20 border-indigo-500 shadow-sm"
+                : "bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 opacity-60"
             }`}
           >
             <div className="flex justify-between items-start mb-1">
@@ -108,4 +108,3 @@ export default function Visualizer({ events, candidates, currentPhase }: Visuali
     </div>
   );
 }
-

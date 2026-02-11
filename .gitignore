@@ -10,4 +10,4 @@ out
 
 # 日志/缓存
 *.log
-
+*.tsbuildinfo

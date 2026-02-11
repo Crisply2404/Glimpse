@@ -7,8 +7,8 @@ const config: Config = {
     extend: {
       keyframes: {
         "drop-in": {
-          "0%": { transform: "translateY(14px) scale(0.98)", opacity: "0" },
-          "100%": { transform: "translateY(0) scale(1)", opacity: "1" },
+          "0%": { transform: "translateY(6px)", opacity: "0" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
         },
         "gacha-shake": {
           "0%, 100%": { transform: "translateX(0)" },
@@ -17,7 +17,7 @@ const config: Config = {
         },
       },
       animation: {
-        drop: "drop-in 0.35s cubic-bezier(0.2, 0.9, 0.2, 1)",
+        drop: "drop-in 0.22s ease-out",
         shake: "gacha-shake 0.2s ease-in-out infinite",
       },
     },

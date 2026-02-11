@@ -25,6 +25,7 @@ export type ScoreBreakdown = {
   scoreChange: number;
   reason: string;
   link?: string;
+  quote?: string;
 };
 
 export type Evidence = {
@@ -37,6 +38,7 @@ export type Candidate = {
   id: string;
   name: string;
   icon: string;
+  iconSourceUrl?: string;
   totalScore: number;
   isEliminated: boolean;
   breakdown: ScoreBreakdown[];
@@ -51,4 +53,3 @@ export type SearchState = {
   visibleResults: string[];
   warnings: string[];
 };
-

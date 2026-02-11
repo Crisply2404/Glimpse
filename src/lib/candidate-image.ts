@@ -24,6 +24,39 @@ function safeParseUrl(url: string) {
   }
 }
 
+function isVideoHostname(hostname: string) {
+  const host = hostname.trim().toLowerCase();
+  if (!host) return false;
+  const patterns: RegExp[] = [
+    /(^|\.)youtube\.com$/i,
+    /(^|\.)youtu\.be$/i,
+    /(^|\.)youtube-nocookie\.com$/i,
+    /(^|\.)ytimg\.com$/i,
+    /(^|\.)bilibili\.com$/i,
+    /(^|\.)bilibili\.tv$/i,
+    /(^|\.)b23\.tv$/i,
+    /(^|\.)tiktok\.com$/i,
+    /(^|\.)douyin\.com$/i,
+    /(^|\.)twitch\.tv$/i,
+    /(^|\.)vimeo\.com$/i,
+    /(^|\.)dailymotion\.com$/i,
+    /(^|\.)dai\.ly$/i,
+    /(^|\.)kuaishou\.com$/i,
+    /(^|\.)ixigua\.com$/i,
+    /(^|\.)youku\.com$/i,
+    /(^|\.)acfun\.cn$/i,
+    /(^|\.)nicovideo\.jp$/i,
+    /(^|\.)niconico\.jp$/i,
+  ];
+  return patterns.some((re) => re.test(host));
+}
+
+function isVideoUrl(url: string) {
+  const u = safeParseUrl(url);
+  if (!u) return false;
+  return isVideoHostname(u.hostname);
+}
+
 function faviconFromUrl(url: string): CandidateImage | null {
   const u = safeParseUrl(url);
   if (!u) return null;
@@ -186,6 +219,13 @@ async function ogImageFromUrl(url: string): Promise<CandidateImage | null> {
       absolute = new URL(img, url).toString();
     }
 
+    // 有些页面会把 og:image 指到视频站的缩略图（看起来像“视频结果”）。
+    // 这里直接跳过，宁可用 favicon，也别用带播放按钮的大缩略图。
+    if (isVideoUrl(absolute)) {
+      setCache(cacheKey, { none: true }, 1000 * 60 * 60);
+      return null;
+    }
+
     const result: CandidateImage = { url: clampUrl(absolute), sourceUrl: url };
     if (!result.url) {
       setCache(cacheKey, { none: true }, 1000 * 60 * 60);
@@ -203,31 +243,35 @@ async function ogImageFromUrl(url: string): Promise<CandidateImage | null> {
 }
 
 export async function pickCandidateImageFromEvidence(evidence: Evidence[]): Promise<CandidateImage | null> {
-  const urls = (evidence ?? [])
+  const allUrls = (evidence ?? [])
     .map((e) => (typeof e?.url === "string" ? e.url.trim() : ""))
     .filter(Boolean)
     .slice(0, 6);
 
-  if (!urls.length) return null;
+  if (!allUrls.length) return null;
+
+  // 优先用“非视频链接”的证据来挑图，避免出现大大的播放按钮缩略图
+  const urls = allUrls.filter((u) => !isVideoUrl(u));
+  const pickFrom = urls.length ? urls : allUrls;
 
   // 1) 直接可推导（最快、最稳定）
-  for (const url of urls) {
+  for (const url of pickFrom) {
     const steam = steamHeaderFromUrl(url);
     if (steam) return steam;
   }
 
   // 2) iOS App Store（用 iTunes lookup 拿高清图）
-  for (const url of urls) {
+  for (const url of pickFrom) {
     const itunes = await itunesArtworkFromAppStoreUrl(url);
     if (itunes) return itunes;
   }
 
   // 3) 通用：抓 og:image / twitter:image
-  for (const url of urls.slice(0, 3)) {
+  for (const url of pickFrom.slice(0, 3)) {
     const og = await ogImageFromUrl(url);
     if (og) return og;
   }
 
   // 4) 最后兜底：favicon（至少别再是随机风景图）
-  return faviconFromUrl(urls[0]);
+  return faviconFromUrl(pickFrom[0]);
 }
