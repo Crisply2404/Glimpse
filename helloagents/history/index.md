@@ -12,6 +12,7 @@
 | 202602101831 | frontend_prototype_integration | 功能 | ✅已完成 | [2026-02/202602101831_frontend_prototype_integration](2026-02/202602101831_frontend_prototype_integration/) |
 | 202602110229 | recall_quality_upgrade | 功能 | ✅已完成 | [2026-02/202602110229_recall_quality_upgrade](2026-02/202602110229_recall_quality_upgrade/) |
 | 202602111625 | non_game_filter_no_autosearch | 修复 | ✅已完成 | [2026-02/202602111625_non_game_filter_no_autosearch](2026-02/202602111625_non_game_filter_no_autosearch/) |
+| 202602120104 | entity_generalization_v1 | 功能 | ✅已完成 | [2026-02/202602120104_entity_generalization_v1](2026-02/202602120104_entity_generalization_v1/) |
 
 ---
 
@@ -23,3 +24,4 @@
 - [202602101831_frontend_prototype_integration](2026-02/202602101831_frontend_prototype_integration/) - 接入 AIStudio 原型 UI（筛选动画 + 扭蛋掉落 + 证据卡片）
 - [202602110229_recall_quality_upgrade](2026-02/202602110229_recall_quality_upgrade/) - 找回质量升级（候选池下限 + 证据约束推理 + 可点开的原文证据）
 - [202602111625_non_game_filter_no_autosearch](2026-02/202602111625_non_game_filter_no_autosearch/) - 过滤视频/榜单候选 + 暂停自动追加搜索 + 配图去“视频味” + UI 防裁剪
+- [202602120104_entity_generalization_v1](2026-02/202602120104_entity_generalization_v1/) - 去“找游戏”痕迹 + 严格候选=目标本体 + Tavily/Brave 对照实验页

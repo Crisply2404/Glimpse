@@ -1,4 +1,4 @@
-import type { Candidate, Clue, PipelineEvent, RecallRequest, RecallResponse, SearchHit } from "@/lib/types";
+import type { Candidate, Clue, PipelineEvent, RecallRequest, RecallResponse, SearchHit, TargetKind } from "@/lib/types";
 import { getCache, setCache } from "@/lib/cache";
 import { makeRunId, stableIdFromString } from "@/lib/id";
 import { clampText, cleanupCandidateName, normalizeCandidateKey } from "@/lib/normalize";
@@ -45,6 +45,7 @@ function defaultOptions(input: RecallRequest["options"]) {
     maxSearchResultsPerQuery: input?.maxSearchResultsPerQuery ?? 8,
     maxQueries: input?.maxQueries ?? 5,
     maxCandidates: input?.maxCandidates ?? 25,
+    provider: input?.provider,
     enrichEvidence: input?.enrichEvidence ?? false,
   };
 }
@@ -54,6 +55,110 @@ function clueTextForPrompt(clues: Clue[]) {
   return clues
     .map((c, idx) => `${idx + 1}. ${c.polarity === "negative" ? "不是/排除" : "是/符合"}（力度${c.weight}）：${c.text}`)
     .join("\n");
+}
+
+function targetKindLabel(kind: TargetKind) {
+  switch (kind) {
+    case "software":
+      return "软件/应用";
+    case "website":
+      return "网站";
+    case "movie":
+      return "电影/影片";
+    case "book":
+      return "书/小说";
+    case "game":
+      return "游戏";
+    case "product":
+      return "产品/硬件";
+    case "unknown":
+    default:
+      return "不确定";
+  }
+}
+
+function normalizeTargetKind(raw: string): TargetKind | "" {
+  const v = raw.trim().toLowerCase();
+  if (!v) return "";
+
+  if (v === "software" || v === "app" || v === "application") return "software";
+  if (v === "website" || v === "site" || v === "web") return "website";
+  if (v === "movie" || v === "film") return "movie";
+  if (v === "book" || v === "novel") return "book";
+  if (v === "game" || v === "videogame" || v === "video_game") return "game";
+  if (v === "product" || v === "hardware" || v === "device") return "product";
+  if (v === "unknown" || v === "uncertain") return "unknown";
+
+  // 容错：允许中文
+  if (/软件|应用|app/.test(v)) return "software";
+  if (/网站|网页|站点/.test(v)) return "website";
+  if (/电影|影片/.test(v)) return "movie";
+  if (/书|小说/.test(v)) return "book";
+  if (/游戏/.test(v)) return "game";
+  if (/产品|硬件|设备/.test(v)) return "product";
+  if (/不确定|未知/.test(v)) return "unknown";
+
+  return "";
+}
+
+function heuristicTargetKind(query: string, clues: Clue[]): TargetKind {
+  const hay = [query, ...clues.map((c) => c.text)].join("\n").toLowerCase();
+  const has = (re: RegExp) => re.test(hay);
+
+  const hasMobileStore = has(/\bapp store\b|\bgoogle play\b|apps\.apple\.com|play\.google\.com|安卓|android|ios|iphone|ipad/i);
+  const hasGameSignals = has(
+    /steam|steampowered|xbox|playstation|nintendo|itch\.io|gog\.com|epic games|游戏|手游|关卡|boss|像素风|rpg|fps|mmo|解谜|益智|\bpuzzle\b/i,
+  );
+  if (hasGameSignals) return "game";
+
+  if (has(/\bimdb\b|电影|影片|导演|主演|片长|上映/i)) return "movie";
+  if (has(/\bgoodreads\b|\bisbn\b|书|小说|作者|出版/i)) return "book";
+
+  if (has(/\bhttps?:\/\//i) || has(/网站|网页|站点|域名|网址/i)) return "website";
+
+  if (
+    has(/软件|应用|客户端|插件|\bextension\b|\bplugin\b|\bsoftware\b/i) ||
+    has(/\bgithub\b|\bnpm\b|\bpypi\b|\bcrate(s)?\.io\b/i) ||
+    (hasMobileStore && !hasGameSignals)
+  ) {
+    return "software";
+  }
+
+  if (has(/型号|规格|参数|价格|购买|评测|开箱|淘宝|京东|亚马逊|amazon/i)) return "product";
+
+  return "unknown";
+}
+
+async function detectTargetKindWithOpenAI(args: {
+  apiKey: string;
+  model: string;
+  baseUrl?: string;
+  query: string;
+  clues: Clue[];
+}): Promise<TargetKind> {
+  const json = await openaiJson<{ targetKind?: string }>({
+    apiKey: args.apiKey,
+    model: args.model,
+    baseUrl: args.baseUrl,
+    system: "你是分类助手。你只输出严格的 JSON（不要多余文字）。任务：根据用户描述与线索，判断他在找的目标更像哪种类型。",
+    user: [
+      '请输出 JSON：{ "targetKind": "software" | "website" | "movie" | "book" | "game" | "product" | "unknown" }',
+      "",
+      "规则：",
+      "- 如果信息不足或很模糊，请输出 unknown",
+      "- 不要输出解释文字，只要 JSON",
+      "",
+      `用户描述：${args.query}`,
+      "",
+      `线索：\n${clueTextForPrompt(args.clues)}`,
+    ].join("\n"),
+    temperature: 0.1,
+    timeoutMs: 20000,
+  });
+
+  const kind = normalizeTargetKind(typeof json.targetKind === "string" ? json.targetKind : "");
+  if (!kind) throw new Error("OpenAI 类型识别失败：返回的 targetKind 不合法。");
+  return kind;
 }
 
 function compactHitPayload(hits: SearchHit[]) {
@@ -72,23 +177,32 @@ async function generateQueriesWithOpenAI(args: {
   query: string;
   clues: Clue[];
   maxQueries: number;
+  targetKind: TargetKind;
 }) {
   const json = await openaiJson<{ queries?: string[] }>({
     apiKey: args.apiKey,
     model: args.model,
     baseUrl: args.baseUrl,
     system:
-      "你是搜索专家。你只输出严格的 JSON（不要多余文字）。目标：为“找回一款记忆中的游戏”生成多条适合搜索引擎的查询词。",
+      "你是搜索专家。你只输出严格的 JSON（不要多余文字）。目标：根据“模糊印象 + 线索”，生成多条适合搜索引擎的查询词，用来命中最可能的候选名字。",
     user: [
       "请输出 JSON：{ \"queries\": string[] }",
       "",
       "规则：",
       `- 生成 ${args.maxQueries} 条查询词（数组长度必须等于该数量）`,
       "- 每条尽量短（像关键词，不要整段句子）",
-      "- 中英混合可以，但至少要有 2 条是英文关键词为主（更容易搜到游戏名）",
-      "- 每条查询必须包含以下任一“游戏信号词”：game / video game / Steam / iOS / Android / App Store / Google Play",
-      "- 优先把“玩法机制”转成关键词（比如：tilt / gravity / accelerometer / liquid / physics / puzzle 等）",
-      "- 不要编造不存在的网页或证据；也不要硬猜游戏名当成结论（可以通过关键词让搜索自己命中）",
+      "- 中英混合可以，但至少要有 2 条是英文关键词为主（更容易命中名字）",
+      "- 可以加“类型信号词”来帮搜索更聚焦，但不要硬加（不确定就别加）",
+      `- 目标类型猜测：${args.targetKind}（${targetKindLabel(args.targetKind)}）`,
+      "- 类型信号词举例：",
+      '  - software: app / software / download / GitHub / npm / PyPI',
+      '  - website: website / site / official / domain',
+      '  - movie: movie / film / IMDb / trailer',
+      '  - book: book / novel / author / ISBN',
+      '  - game: game / video game / Steam / iOS / Android / App Store / Google Play',
+      '  - product: product / official / specs / model',
+      "- 优先把“特点/机制/界面/功能”转成关键词（比如：tilt / gravity / accelerometer / liquid / physics / puzzle 等）",
+      "- 不要编造不存在的网页或证据；也不要硬猜名字当成结论（可以通过关键词让搜索自己命中）",
       "",
       `用户描述：${args.query}`,
       "",
@@ -140,7 +254,7 @@ function heuristicKeywordsFromQuery(query: string) {
   return uniqStrings(words);
 }
 
-function fallbackQueries(args: { query: string; clues: Clue[]; maxQueries: number }) {
+function fallbackQueries(args: { query: string; clues: Clue[]; maxQueries: number; targetKind: TargetKind }) {
   const base = args.query.trim();
   const clueWords = args.clues
     .filter((c) => c.polarity === "positive")
@@ -152,29 +266,50 @@ function fallbackQueries(args: { query: string; clues: Clue[]; maxQueries: numbe
   const boostText = boost.length ? boost.join(" ") : "";
   const clueText = clueWords.length ? clueWords.join(" ") : "";
 
+  const kindHints = (() => {
+    switch (args.targetKind) {
+      case "software":
+        return ["app", "software", "GitHub", "download"];
+      case "website":
+        return ["website", "official", "domain"];
+      case "movie":
+        return ["movie", "film", "IMDb"];
+      case "book":
+        return ["book", "novel", "ISBN"];
+      case "game":
+        return ["game", "Steam", "App Store", "Google Play"];
+      case "product":
+        return ["product", "official", "model", "specs"];
+      case "unknown":
+      default:
+        return ["official", "wikipedia"];
+    }
+  })();
+
+  const hintText = kindHints.slice(0, 2).join(" ");
+
   const list = uniqStrings(
     [
-      `${base} game`,
-      `${base} mobile game`,
-      `${base} iOS game`,
-      `${base} Android game`,
-      boostText ? `${boostText} game` : "",
-      boostText ? `${boostText} mobile game` : "",
-      boostText ? `${boostText} iOS App Store game` : "",
-      clueText ? `${clueText} game` : "",
-      clueText ? `${boostText} ${clueText} game` : "",
-      `${base} video game`,
-      `${base} Steam game`,
+      base,
+      hintText ? `${base} ${hintText}` : "",
+      boostText ? `${base} ${boostText}` : "",
+      clueText ? `${base} ${clueText}` : "",
+      boostText && clueText ? `${boostText} ${clueText}` : "",
+      boostText && hintText ? `${boostText} ${hintText}` : "",
+      `${base} name`,
+      `${base} wikipedia`,
     ].filter(Boolean),
   );
 
-  // 不够就用更泛的组合补齐
-  const fallbackPool = uniqStrings([
-    "tilt gravity liquid physics puzzle game",
-    "gravity tilt liquid mobile game",
-    "tilt liquid puzzle iOS App Store game",
-    "liquid physics puzzle Android Google Play game",
-  ]);
+  // 不够就用更泛的组合补齐（尽量不带“默认=游戏”的偏见）
+  const fallbackPool = uniqStrings(
+    [
+      "tilt gravity liquid physics puzzle",
+      "gravity tilt liquid mobile",
+      "tilt liquid physics puzzle",
+      hintText ? `${hintText} name` : "",
+    ].filter(Boolean),
+  );
 
   const out: string[] = [];
   for (const q of list) {
@@ -197,6 +332,7 @@ async function extractCandidatesWithOpenAI(args: {
   clues: Clue[];
   hits: SearchHit[];
   maxCandidates: number;
+  targetKind: TargetKind;
 }): Promise<RawCandidate[]> {
   const json = await openaiJson<{
     candidates?: Array<{
@@ -209,7 +345,7 @@ async function extractCandidatesWithOpenAI(args: {
     model: args.model,
     baseUrl: args.baseUrl,
     system:
-      "你是信息提炼助手。你只输出严格的 JSON（不要多余文字）。你的任务是从搜索摘要里提炼“可能的游戏候选”，并且每个候选必须给出证据链接。",
+      "你是信息提炼助手。你只输出严格的 JSON（不要多余文字）。你的任务是从搜索摘要里提炼“可能的候选名字”，并且每个候选必须给出证据链接。",
     user: [
       `请输出 JSON：{ "candidates": { "name": string, "altNames"?: string[], "evidence": { "url": string, "title"?: string, "snippet": string }[] }[] }`,
       "",
@@ -217,10 +353,13 @@ async function extractCandidatesWithOpenAI(args: {
       `- 最多输出 ${args.maxCandidates} 个候选`,
       "- 不要编造不存在的网页链接：evidence.url 必须来自下面提供的 hits.url",
       "- 每个候选至少 1 条证据，最多 3 条证据",
-      "- 候选名尽量用游戏的常用英文名；如果只有中文名也可以",
-      "- ⚠️ 候选必须是“具体游戏本体的名字”，不要输出视频标题/榜单标题/攻略标题（例如：Top 10 / Games like / Gameplay / 盘点/推荐/攻略/合集）",
+      "- 候选必须是“一个具体名字”（可能是软件/网站/电影/书/游戏/产品等），不要输出网页标题/问句/盘点",
+      "- ⚠️ 候选不允许是内容标题：Top 10 / Best / alternatives / how to / tutorial / gameplay / 盘点/推荐/合集/攻略/教程/评测 等都不行",
       "- 如果某条命中明显来自视频站（YouTube/B站等），不要把它的标题当候选名",
       "- 如果某条摘要明显是攻略/梗图/无关内容，请不要提为候选",
+      "- 如果能找到更像“本体页”的链接，请优先把它放进 evidence（例如：官网/商店页/Wikipedia/GitHub/npm 等）",
+      "",
+      `目标类型猜测：${args.targetKind}（${targetKindLabel(args.targetKind)}）`,
       "",
       `用户描述：${args.query}`,
       "",
@@ -257,15 +396,15 @@ async function extractCandidatesWithOpenAI(args: {
   return candidates.slice(0, args.maxCandidates);
 }
 
-function fallbackExtractCandidates(args: { hits: SearchHit[]; maxCandidates: number }): RawCandidate[] {
+function fallbackExtractCandidates(args: { hits: SearchHit[]; maxCandidates: number; targetKind: TargetKind }): RawCandidate[] {
   const results: RawCandidate[] = [];
   const seen = new Set<string>();
 
   for (const h of args.hits) {
-    if (shouldSkipHitForCandidate(h)) continue;
+    if (shouldSkipHitForCandidate(h, args.targetKind)) continue;
     const raw = h.title.split("|")[0]?.split("–")[0]?.split("-")[0] ?? "";
     const name = cleanupCandidateName(raw);
-    if (isLikelyNonGameCandidateName(name)) continue;
+    if (isLikelyBadCandidateName(name)) continue;
     const key = normalizeCandidateKey(name);
     if (!name || key.length < 2 || seen.has(key)) continue;
     seen.add(key);
@@ -287,6 +426,7 @@ async function scoreWithOpenAI(args: {
   query: string;
   clues: Clue[];
   candidates: Candidate[];
+  targetKind: TargetKind;
 }) {
   const json = await openaiJson<{
     scored?: Array<{
@@ -305,7 +445,7 @@ async function scoreWithOpenAI(args: {
     model: args.model,
     baseUrl: args.baseUrl,
     system:
-      "你是一个“找回记忆中的游戏”的评分助手。你只输出严格的 JSON（不要多余文字）。你必须基于证据链接与摘要做判断，不要拍脑袋。",
+      "你是评分助手。你只输出严格的 JSON（不要多余文字）。你必须基于证据链接与摘要做判断，不要拍脑袋。",
     user: [
       `请输出 JSON：{ "scored": { "name": string, "score": number, "scoreBreakdown": { "clue": string, "delta": number, "reason": string, "evidenceUrl"?: string, "evidenceQuote"?: string }[] }[] }`,
       "",
@@ -315,10 +455,12 @@ async function scoreWithOpenAI(args: {
       "- ⚠️ 证据约束（很重要）：只要 delta ≠ 0，就必须同时给出 evidenceUrl + evidenceQuote",
       "- evidenceUrl 必须是该候选 evidence 里的 url（禁止编造链接）",
       "- evidenceQuote 必须是该候选 evidence.snippet 里的原文片段（直接复制一小段，20~90字）",
-      "- reason 里提到的关键事实（比如平台/年份/玩法/是否支持某功能等），必须能在 evidenceQuote 里找到对应文字；找不到就别写",
+      "- reason 里提到的关键事实（比如平台/年份/特征/是否支持某功能等），必须能在 evidenceQuote 里找到对应文字；找不到就别写",
       "- 如果找不到能直接支持某结论的原文：delta 必须是 0，并在 reason 里写“证据不足，先不下结论”",
-      "- 禁止根据“来源网站”做跳步推断：例如看到 Steam 页面，只能说明“在 Steam 上能看到它”，不能推断“只在 PC/没有手机版”",
-      "- 如果证据偏攻略/梗图/无关，请降低分数并说明原因（也要给 quote）",
+      "- 禁止根据“来源网站”做跳步推断：例如看到 Steam/GitHub，只能说明“那里能看到它”，不能推断“只在某个平台/没有其它平台”",
+      "- 如果证据偏教程/盘点/无关，请降低分数并说明原因（也要给 quote）",
+      "",
+      `目标类型猜测：${args.targetKind}（${targetKindLabel(args.targetKind)}）`,
       "",
       `用户描述：${args.query}`,
       "",
@@ -466,35 +608,144 @@ function isVideoUrl(url: string) {
   return isVideoHostname(u.hostname);
 }
 
-function looksLikeListOrVideoTitle(text: string) {
+function looksLikeQuestionOrHelpTitle(text: string) {
   const t = text.trim();
   if (!t) return false;
   const lower = t.toLowerCase();
 
-  // 英文榜单/集合
-  if (/\bgames\s+like\b/i.test(lower)) return true;
-  if (/^(top|best)\s*\d+\b/i.test(lower) && /\bgame/.test(lower)) return true;
-  if (/^\d{1,3}\s*(\+)?\s*(best|top|insane|fun|great|awesome)?\s*games?\b/i.test(lower)) return true;
+  // 仅凭问号太粗暴：加一点长度门槛
+  if ((t.includes("?") || t.includes("？")) && t.length >= 18) return true;
 
-  // 英文视频/内容类型（我们要的是“游戏名”，不是内容标题）
-  if (/\bgameplay\b/i.test(lower)) return true;
-  if (/\blet'?s\s+play\b|\bplaythrough\b|\btrailer\b|\bteaser\b|\bpreview\b|\bsoundtrack\b|\bost\b/i.test(lower)) return true;
-  if (/\bwalkthrough\b|\bguide\b|\btips\b|\bcheats?\b|\breview\b/i.test(lower)) return true;
-  if (/\bfull\s+game\b|\blongplay\b|\bspeedrun\b|\bno\s+commentary\b/i.test(lower)) return true;
+  // 英文问句/求助
+  if (
+    /\bwhat\s+is\b|\bwhat'?s\b|\banyone\s+know\b|\bhelp\b|\blooking\s+for\b|\bidentify\b|\bdoes\s+anyone\s+remember\b|\bname\s+of\b/i.test(
+      lower,
+    )
+  ) {
+    return true;
+  }
 
-  // 中文榜单/攻略/内容
-  if (/\d+\s*款.*(游戏|手游)/.test(t)) return true;
-  if (/盘点|推荐|排行|排行榜|合集|攻略|解说|实况|通关|评测|测评|开箱/.test(t)) return true;
-  if (/预告|预告片|宣传片|\bPV\b|全流程|速通|原声|主题曲|OST|音乐|配乐|试玩/.test(t)) return true;
-  if (/类似.*游戏|游戏.*类似|像.*游戏/.test(t) && /游戏/.test(t)) return true;
+  // 中文问句/求助
+  if (/求助|请问|有人知道|这是什么|叫什么|名字是什么|求.*名字|想找.*名字/.test(t)) return true;
 
   return false;
 }
 
-function hitLooksLikeGamePageUrl(url: string) {
+function looksLikeContentTitle(text: string) {
+  const t = text.trim();
+  if (!t) return false;
+  const lower = t.toLowerCase();
+
+  if (looksLikeQuestionOrHelpTitle(t)) return true;
+
+  // 英文榜单/集合/对比/教程（我们要的是“名字”，不是内容标题）
+  if (/^(top|best)\s*\d+\b/i.test(lower)) return true;
+  if (/^\d{1,3}\s*(\+)?\s*(best|top|insane|fun|great|awesome)?\b/i.test(lower) && /\b(list|apps?|tools?|sites?|games?|movies?|books?|products?)\b/i.test(lower)) {
+    return true;
+  }
+  if (/\b(alternatives?|similar\s+to|apps?\s+like|tools?\s+like|sites?\s+like|games?\s+like)\b/i.test(lower)) return true;
+  if (/\bhow\s+to\b|\btutorial\b|\bguide\b|\bwalkthrough\b|\btips?\b|\bcheats?\b|\breview\b|\bcomparison\b|\bvs\b|\bversus\b/i.test(lower)) {
+    return true;
+  }
+
+  // 英文视频/内容类型
+  if (/\bgameplay\b|\blet'?s\s+play\b|\bplaythrough\b|\btrailer\b|\bteaser\b|\bpreview\b/i.test(lower)) return true;
+  if (/\bfull\s+(game|movie)\b|\blongplay\b|\bspeedrun\b|\bno\s+commentary\b|\bsoundtrack\b|\bost\b/i.test(lower)) return true;
+
+  // 中文榜单/攻略/内容
+  if (/\d+\s*(款|个|部|本)\b.*(推荐|盘点|排行|排行榜|合集)/.test(t)) return true;
+  if (/盘点|推荐|排行|排行榜|合集|攻略|教程|教学|解说|实况|通关|评测|测评|开箱|对比|替代|类似/.test(t)) return true;
+  if (/预告|预告片|宣传片|\bPV\b|全流程|速通|原声|主题曲|OST|音乐|配乐|试玩/.test(t)) return true;
+
+  return false;
+}
+
+function githubRepoFromUrl(url: string) {
+  const u = safeParseUrl(url);
+  if (!u) return "";
+  if (!/(^|\.)github\.com$/i.test(u.hostname)) return "";
+  const parts = u.pathname.split("/").filter(Boolean);
+  if (parts.length < 2) return "";
+  const [owner, repo] = parts;
+  if (!owner || !repo) return "";
+  // 排除明显不是仓库主页的路径
+  const blocked = new Set(["issues", "pulls", "discussions", "wiki", "releases", "actions", "security", "topics"]);
+  if (blocked.has(owner.toLowerCase())) return "";
+  return `${owner}/${repo}`;
+}
+
+function npmPackageFromUrl(url: string) {
+  const u = safeParseUrl(url);
+  if (!u) return "";
+  if (!/(^|\.)npmjs\.com$/i.test(u.hostname)) return "";
+  const m = u.pathname.match(/^\/package\/([^/]+)(\/|$)/i);
+  return m?.[1] ?? "";
+}
+
+function pypiProjectFromUrl(url: string) {
+  const u = safeParseUrl(url);
+  if (!u) return "";
+  if (!/(^|\.)pypi\.org$/i.test(u.hostname)) return "";
+  const m = u.pathname.match(/^\/project\/([^/]+)(\/|$)/i);
+  return m?.[1] ?? "";
+}
+
+function cratesNameFromUrl(url: string) {
+  const u = safeParseUrl(url);
+  if (!u) return "";
+  if (!/(^|\.)crates\.io$/i.test(u.hostname)) return "";
+  const m = u.pathname.match(/^\/crates\/([^/]+)(\/|$)/i);
+  return m?.[1] ?? "";
+}
+
+function imdbTitleIdFromUrl(url: string) {
+  const u = safeParseUrl(url);
+  if (!u) return "";
+  if (!/(^|\.)imdb\.com$/i.test(u.hostname)) return "";
+  const m = u.pathname.match(/^\/title\/(tt\d+)(\/|$)/i);
+  return m?.[1] ?? "";
+}
+
+function goodreadsBookIdFromUrl(url: string) {
+  const u = safeParseUrl(url);
+  if (!u) return "";
+  if (!/(^|\.)goodreads\.com$/i.test(u.hostname)) return "";
+  const m = u.pathname.match(/^\/book\/show\/(\d+)([.\-/]|$)/i);
+  return m?.[1] ?? "";
+}
+
+function isDiscussionOrContentPlatformHost(hostname: string) {
+  const host = hostname.trim().toLowerCase();
+  if (!host) return false;
+  const patterns: RegExp[] = [
+    /(^|\.)reddit\.com$/i,
+    /(^|\.)stackoverflow\.com$/i,
+    /(^|\.)stackexchange\.com$/i,
+    /(^|\.)quora\.com$/i,
+    /(^|\.)zhihu\.com$/i,
+    /(^|\.)medium\.com$/i,
+  ];
+  return patterns.some((re) => re.test(host));
+}
+
+function looksLikeHomepage(u: URL) {
+  const path = (u.pathname || "/").replace(/\/+$/, "/");
+  if (path === "/") return true;
+  if (/^\/(about|pricing|download|home|index\.html?)\/?$/i.test(path)) return true;
+  return false;
+}
+
+function hitLooksLikeEntityPageUrl(url: string, kind: TargetKind) {
+  // 通用“本体页”来源（不限定类型，尽量少误杀）
   if (steamAppIdFromUrl(url)) return true;
   if (appStoreIdFromUrl(url)) return true;
   if (googlePlayPackageFromUrl(url)) return true;
+  if (githubRepoFromUrl(url)) return true;
+  if (npmPackageFromUrl(url)) return true;
+  if (pypiProjectFromUrl(url)) return true;
+  if (cratesNameFromUrl(url)) return true;
+  if (imdbTitleIdFromUrl(url)) return true;
+  if (goodreadsBookIdFromUrl(url)) return true;
 
   const u = safeParseUrl(url);
   if (!u) return false;
@@ -502,47 +753,56 @@ function hitLooksLikeGamePageUrl(url: string) {
   const path = u.pathname.toLowerCase();
 
   if (/wikipedia\.org$/i.test(host) && path.startsWith("/wiki/")) return true;
-  if (/itch\.io$/i.test(host) && path.length > 1) return true;
-  if (/gog\.com$/i.test(host) && path.includes("/game/")) return true;
-  if (/store\.epicgames\.com$/i.test(host) && path.startsWith("/")) return true;
-  if (/nintendo\.com$/i.test(host) && path.includes("/store/")) return true;
-  if (/playstation\.com$/i.test(host) && path.includes("/games/")) return true;
-  if (/xbox\.com$/i.test(host) && path.includes("/games/")) return true;
+
+  // 额外的“更像本体页”的站点（按类型补充，但不会排除其它类型）
+  if (kind === "game" || kind === "unknown") {
+    if (/itch\.io$/i.test(host) && path.length > 1) return true;
+    if (/gog\.com$/i.test(host) && path.includes("/game/")) return true;
+    if (/store\.epicgames\.com$/i.test(host) && path.startsWith("/")) return true;
+    if (/nintendo\.com$/i.test(host) && path.includes("/store/")) return true;
+    if (/playstation\.com$/i.test(host) && path.includes("/games/")) return true;
+    if (/xbox\.com$/i.test(host) && path.includes("/games/")) return true;
+  }
+
+  // 网站/软件/产品：主页也很可能是本体页（但排除内容平台）
+  if ((kind === "website" || kind === "software" || kind === "product" || kind === "unknown") && !isDiscussionOrContentPlatformHost(host)) {
+    if (looksLikeHomepage(u)) return true;
+  }
 
   return false;
 }
 
-function shouldSkipHitForCandidate(hit: SearchHit) {
+function shouldSkipHitForCandidate(hit: SearchHit, targetKind: TargetKind) {
   if (!hit?.url) return true;
   if (isVideoUrl(hit.url)) return true;
 
-  // 像“Steam/App Store/Google Play/Wikipedia”这种明确游戏页，不做标题规则过滤
-  if (hitLooksLikeGamePageUrl(hit.url)) return false;
+  // 像“商店页/百科/仓库”这种更像本体页的链接，不做标题规则过滤
+  if (hitLooksLikeEntityPageUrl(hit.url, targetKind)) return false;
 
-  // 其它网页：用标题/摘要判断“是不是更像内容页（视频/榜单/攻略）”
-  if (looksLikeListOrVideoTitle(hit.title)) return true;
-  if (looksLikeListOrVideoTitle(hit.snippet)) return true;
+  // 其它网页：用标题/摘要判断“是不是更像内容页（视频/盘点/教程/问句）”
+  if (looksLikeContentTitle(hit.title)) return true;
+  if (looksLikeContentTitle(hit.snippet)) return true;
 
   return false;
 }
 
-function shouldSkipEvidenceForCandidate(evidence: { url: string; title?: string; snippet: string }) {
+function shouldSkipEvidenceForCandidate(evidence: { url: string; title?: string; snippet: string }, targetKind: TargetKind) {
   if (!evidence?.url) return true;
   if (isVideoUrl(evidence.url)) return true;
 
-  // 像“Steam/App Store/Google Play/Wikipedia”这种明确游戏页：允许作为证据
-  if (hitLooksLikeGamePageUrl(evidence.url)) return false;
+  // 像“商店页/百科/仓库”这种更像本体页的链接：允许作为证据
+  if (hitLooksLikeEntityPageUrl(evidence.url, targetKind)) return false;
 
-  // 其它网页：如果更像内容页（视频/榜单/攻略），就别拿来当候选证据（避免 Top 里混进“视频感”）
-  if (looksLikeListOrVideoTitle(evidence.title ?? "")) return true;
-  if (looksLikeListOrVideoTitle(evidence.snippet ?? "")) return true;
+  // 其它网页：如果更像内容页（视频/盘点/教程/问句），就别拿来当候选证据（避免 Top 里混进“内容标题感”）
+  if (looksLikeContentTitle(evidence.title ?? "")) return true;
+  if (looksLikeContentTitle(evidence.snippet ?? "")) return true;
 
   return false;
 }
 
-function isLikelyNonGameCandidateName(name: string) {
-  // 候选名本身如果像“榜单/视频标题”，直接排除（防止误提名）
-  return looksLikeListOrVideoTitle(name);
+function isLikelyBadCandidateName(name: string) {
+  // 候选名本身如果像“内容标题/问句”，直接排除（防止误提名）
+  return looksLikeContentTitle(name);
 }
 
 function candidateKeyFromNameAndEvidence(name: string, evidence: Candidate["evidence"]) {
@@ -554,6 +814,45 @@ function candidateKeyFromNameAndEvidence(name: string, evidence: Candidate["evid
 
   const gp = (evidence ?? []).map((e) => googlePlayPackageFromUrl(e.url)).find(Boolean);
   if (gp) return `gp:${gp.toLowerCase()}`;
+
+  const gh = (evidence ?? []).map((e) => githubRepoFromUrl(e.url)).find(Boolean);
+  if (gh) return `gh:${gh.toLowerCase()}`;
+
+  const npm = (evidence ?? []).map((e) => npmPackageFromUrl(e.url)).find(Boolean);
+  if (npm) return `npm:${npm.toLowerCase()}`;
+
+  const pypi = (evidence ?? []).map((e) => pypiProjectFromUrl(e.url)).find(Boolean);
+  if (pypi) return `pypi:${pypi.toLowerCase()}`;
+
+  const crate = (evidence ?? []).map((e) => cratesNameFromUrl(e.url)).find(Boolean);
+  if (crate) return `crate:${crate.toLowerCase()}`;
+
+  const imdb = (evidence ?? []).map((e) => imdbTitleIdFromUrl(e.url)).find(Boolean);
+  if (imdb) return `imdb:${imdb.toLowerCase()}`;
+
+  const gr = (evidence ?? []).map((e) => goodreadsBookIdFromUrl(e.url)).find(Boolean);
+  if (gr) return `gr:${gr}`;
+
+  const wiki = (evidence ?? []).find((e) => {
+    const u = safeParseUrl(e.url);
+    return Boolean(u && /wikipedia\.org$/i.test(u.hostname) && u.pathname.toLowerCase().startsWith("/wiki/"));
+  });
+  if (wiki) {
+    const u = safeParseUrl(wiki.url);
+    const slug = u ? decodeURIComponent(u.pathname.slice("/wiki/".length)) : "";
+    if (slug) return `wiki:${slug.toLowerCase()}`;
+  }
+
+  const home = (evidence ?? []).find((e) => {
+    const u = safeParseUrl(e.url);
+    if (!u) return false;
+    if (isDiscussionOrContentPlatformHost(u.hostname)) return false;
+    return looksLikeHomepage(u);
+  });
+  if (home) {
+    const u = safeParseUrl(home.url);
+    if (u?.hostname) return `site:${u.hostname.toLowerCase()}`;
+  }
 
   return normalizeCandidateKey(name);
 }
@@ -575,7 +874,11 @@ function betterDisplayName(a: string, b: string) {
   return scoreName(bb) > scoreName(aa) ? bb : aa;
 }
 
-function dedupeCandidates(raw: Array<{ name: string; altNames?: string[]; evidence: Candidate["evidence"] }>, max: number) {
+function dedupeCandidates(
+  raw: Array<{ name: string; altNames?: string[]; evidence: Candidate["evidence"] }>,
+  max: number,
+  targetKind: TargetKind,
+) {
   const map = new Map<string, Candidate>();
 
   for (const r of raw) {
@@ -586,7 +889,7 @@ function dedupeCandidates(raw: Array<{ name: string; altNames?: string[]; eviden
         title: e.title ? clampText(e.title, 120) : undefined,
         snippet: clampText(e.snippet, 320),
       }))
-      .filter((e) => e.url && e.snippet && !shouldSkipEvidenceForCandidate(e));
+      .filter((e) => e.url && e.snippet && !shouldSkipEvidenceForCandidate(e, targetKind));
     if (!evidence.length) continue;
 
     const key = candidateKeyFromNameAndEvidence(name, evidence);
@@ -691,6 +994,10 @@ function wantsMobileEvidence(query: string, clues: Clue[]) {
   ]);
 }
 
+function candidateHasEntityEvidence(candidate: Candidate, targetKind: TargetKind) {
+  return (candidate.evidence ?? []).some((e) => hitLooksLikeEntityPageUrl(e.url, targetKind));
+}
+
 function candidateHasHost(candidate: Candidate, host: RegExp) {
   return (candidate.evidence ?? []).some((e) => {
     const u = safeParseUrl(e.url);
@@ -748,12 +1055,13 @@ async function enrichTopImages(candidates: Candidate[], limit: number) {
 export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Promise<RecallResponse> {
   const opts = defaultOptions(input.options);
 
-  const tavilyKey = safeEnv("TAVILY_API_KEY");
-  if (!tavilyKey) {
-    throw new Error("缺少 Tavily API key：请在 .env.local 里配置 TAVILY_API_KEY。");
+  const searchProvider = getSearchProvider(opts.provider);
+  const searchKeyEnv = searchProvider.id === "brave" ? "BRAVE_API_KEY" : "TAVILY_API_KEY";
+  const searchApiKey = safeEnv(searchKeyEnv);
+  if (!searchApiKey) {
+    const name = searchProvider.id === "brave" ? "Brave" : "Tavily";
+    throw new Error(`缺少 ${name} API key：请在 .env.local 里配置 ${searchKeyEnv}。`);
   }
-
-  const searchProvider = getSearchProvider();
 
   const openaiKey = safeEnv("OPENAI_API_KEY");
   const openaiModel = safeEnv("OPENAI_MODEL") || "gpt-4o-mini";
@@ -795,6 +1103,29 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
     await hooks?.onCandidates?.(list);
   };
 
+  // 0) 先判断“更像在找哪类东西”（不做 UI 下拉）
+  let targetKind: TargetKind = "unknown";
+  if (useOpenAI) {
+    try {
+      targetKind = await detectTargetKindWithOpenAI({
+        apiKey: openaiKey,
+        model: openaiModel,
+        baseUrl: openaiBaseUrl,
+        query: input.query,
+        clues: input.clues,
+      });
+    } catch {
+      targetKind = heuristicTargetKind(input.query, input.clues);
+      const msg = "目标类型判断失败：已回退到简单规则（可能不准）。";
+      warnings.push(msg);
+      await hooks?.onWarning?.(msg);
+    }
+  } else {
+    targetKind = heuristicTargetKind(input.query, input.clues);
+  }
+
+  await emitEvent(makeEvent("search", `目标类型：${targetKindLabel(targetKind)}。`, { targetKind }));
+
   // 1) 生成搜索词
   let queries: string[];
   if (useOpenAI) {
@@ -807,32 +1138,33 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
         query: input.query,
         clues: input.clues,
         maxQueries: opts.maxQueries,
+        targetKind,
       });
     } catch (e) {
       const msg = "搜索词生成失败：已回退到简单拼接（可能漏掉一些方向）。";
       warnings.push(msg);
       await hooks?.onWarning?.(msg);
-      queries = fallbackQueries({ query: input.query, clues: input.clues, maxQueries: opts.maxQueries });
+      queries = fallbackQueries({ query: input.query, clues: input.clues, maxQueries: opts.maxQueries, targetKind });
     }
   } else {
-    queries = fallbackQueries({ query: input.query, clues: input.clues, maxQueries: opts.maxQueries });
+    queries = fallbackQueries({ query: input.query, clues: input.clues, maxQueries: opts.maxQueries, targetKind });
   }
 
   // 小保险：把“机制关键词”查询混进去（避免只搜到很泛的结果）
-  queries = uniqStrings([...queries, ...fallbackQueries({ query: input.query, clues: input.clues, maxQueries: opts.maxQueries })]).slice(
+  queries = uniqStrings([...queries, ...fallbackQueries({ query: input.query, clues: input.clues, maxQueries: opts.maxQueries, targetKind })]).slice(
     0,
     opts.maxQueries,
   );
 
   await emitEvent(makeEvent("search", `搜索词已就绪：${queries.length} 条。`, { queries }));
 
-  // 2) Tavily 搜索（多轮）
+  // 2) 搜索（多轮）
   const rawHits: Array<{ q: string; rank: number; title: string; url: string; snippet: string; score?: number }> = [];
   for (let i = 0; i < queries.length; i++) {
     const q = queries[i];
     await emitEvent(makeEvent("search", `搜索（${i + 1}/${queries.length}）：${clampText(q, 120)}`));
     const hits = await searchProvider.search({
-      apiKey: tavilyKey,
+      apiKey: searchApiKey,
       query: q,
       maxResults: opts.maxSearchResultsPerQuery,
       searchDepth: "advanced",
@@ -863,31 +1195,32 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
       runId,
       events,
       candidates: [],
-      warnings: [...warnings, "没有搜到有效网页：你可以换个说法，或加更具体的线索（年份/平台/玩法）。"],
+      targetKind,
+      warnings: [...warnings, "没有搜到有效网页：你可以换个说法，或加更具体的线索（年份/平台/特征）。"],
     };
     setCache(cacheKey, result, 1000 * 60 * 3);
     return result;
   }
 
   const hitsNoVideo = mergedHits.filter((h) => !isVideoUrl(h.url));
-  const hitsForExtraction0 = hitsNoVideo.filter((h) => !shouldSkipHitForCandidate(h));
+  const hitsForExtraction0 = hitsNoVideo.filter((h) => !shouldSkipHitForCandidate(h, targetKind));
   const extractionHits = hitsForExtraction0.length ? hitsForExtraction0 : hitsNoVideo.length ? hitsNoVideo : mergedHits;
 
   if (extractionHits.length !== mergedHits.length) {
     await emitEvent(
       makeEvent(
         "filter",
-        `已过滤 ${mergedHits.length - extractionHits.length} 条“更像视频/榜单/攻略”的网页（避免把内容标题当成游戏候选）。`,
+        `已过滤 ${mergedHits.length - extractionHits.length} 条“更像视频/盘点/教程/问句”的网页（避免把内容标题当成候选名）。`,
         { removed: mergedHits.length - extractionHits.length, kept: extractionHits.length },
       ),
     );
   }
 
   // 3) 提炼候选
-  await emitEvent(makeEvent("extract", "提炼候选：从网页摘要里找出可能的游戏名…"));
+  await emitEvent(makeEvent("extract", "提炼候选：从网页摘要里找出可能的候选名…"));
   const minPool = Math.min(opts.maxCandidates, Math.max(opts.topK * 3, 12));
 
-  const fallbackRaw = fallbackExtractCandidates({ hits: extractionHits, maxCandidates: opts.maxCandidates });
+  const fallbackRaw = fallbackExtractCandidates({ hits: extractionHits, maxCandidates: opts.maxCandidates, targetKind });
 
   let rawCandidateList: RawCandidate[] = useOpenAI
     ? await extractCandidatesWithOpenAI({
@@ -898,6 +1231,7 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
         clues: input.clues,
         hits: extractionHits,
         maxCandidates: opts.maxCandidates,
+        targetKind,
       })
     : fallbackRaw;
 
@@ -914,7 +1248,7 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
     );
   }
 
-  rawCandidateList = rawCandidateList.filter((c) => c.name && !isLikelyNonGameCandidateName(c.name));
+  rawCandidateList = rawCandidateList.filter((c) => c.name && !isLikelyBadCandidateName(c.name));
 
   let candidates = dedupeCandidates(
     rawCandidateList.map((c) => ({
@@ -927,9 +1261,10 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
       })),
     })),
     opts.maxCandidates,
+    targetKind,
   );
 
-  // 兜底：如果候选数连 TopK 都不够，尝试用“像游戏页”的命中补位（不会用视频/榜单标题补位）
+  // 兜底：如果候选数连 TopK 都不够，尝试用“更像本体页”的命中补位（不会用视频/盘点/教程标题补位）
   if (candidates.length < opts.topK) {
     const need = opts.topK - candidates.length;
     const extras: Candidate[] = [];
@@ -937,12 +1272,12 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
     const seenEvidenceUrls = new Set(candidates.flatMap((c) => (c.evidence ?? []).map((e) => e.url)));
 
     for (const h of mergedHits) {
-      if (shouldSkipHitForCandidate(h)) continue;
-      if (!hitLooksLikeGamePageUrl(h.url)) continue;
+      if (shouldSkipHitForCandidate(h, targetKind)) continue;
+      if (!hitLooksLikeEntityPageUrl(h.url, targetKind)) continue;
       if (seenEvidenceUrls.has(h.url)) continue;
       const raw = h.title.split("|")[0]?.split("–")[0]?.split("-")[0] ?? "";
       const name = cleanupCandidateName(raw) || clampText(h.title, 60) || "网页线索";
-      if (!name || isLikelyNonGameCandidateName(name)) continue;
+      if (!name || isLikelyBadCandidateName(name)) continue;
       const key = `hit:${h.url}`;
       const id = stableIdFromString("cand", key);
       if (seen.has(id)) continue;
@@ -956,7 +1291,7 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
           {
             clue: "补位",
             delta: 0,
-            reason: "候选不足时的低置信补位：来自“像游戏页”的网页标题，尚未深挖。",
+            reason: "候选不足时的低置信补位：来自“更像本体页”的网页标题，尚未深挖。",
           },
         ],
         evidence: [{ url: h.url, title: h.title, snippet: clampText(h.snippet, 240) }],
@@ -966,21 +1301,21 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
 
     if (extras.length) {
       candidates = [...candidates, ...extras].slice(0, opts.maxCandidates);
-      const msg = `候选不足 ${opts.topK} 个：已用 ${extras.length} 个“低置信补位”填充（不会用视频/榜单标题补位）。`;
+      const msg = `候选不足 ${opts.topK} 个：已用 ${extras.length} 个“低置信补位”填充（不会用视频/盘点/教程标题补位）。`;
       warnings.push(msg);
       await hooks?.onWarning?.(msg);
       await emitEvent(makeEvent("extract", msg));
     } else {
-      const msg = `候选不足 ${opts.topK} 个：已过滤掉视频/榜单/攻略等内容页，本次不做“内容标题补位”。你可以补充更具体线索（年份/平台/玩法），再试一次。`;
+      const msg = `候选不足 ${opts.topK} 个：已过滤掉视频/盘点/教程等内容页，本次不做“内容标题补位”。你可以补充更具体线索（年份/平台/特征），再试一次。`;
       warnings.push(msg);
       await hooks?.onWarning?.(msg);
       await emitEvent(makeEvent("extract", msg));
     }
   }
 
-  // 候选池仍然偏小：为了先保证“别把视频/榜单当游戏”，这里不做额外追加搜索（省钱/省噪音）。
+  // 候选池仍然偏小：为了先保证“别把内容标题当候选名”，这里不做额外追加搜索（省钱/省噪音）。
   if (candidates.length < minPool) {
-    const msg = `候选池偏小（${candidates.length}/${minPool}）：为了保证结果干净，本次先不追加搜索。你可以补充更具体线索（年份/平台/玩法），再试一次。`;
+    const msg = `候选池偏小（${candidates.length}/${minPool}）：为了保证结果干净，本次先不追加搜索。你可以补充更具体线索（年份/平台/特征），再试一次。`;
     warnings.push(msg);
     await hooks?.onWarning?.(msg);
     await emitEvent(makeEvent("search", msg));
@@ -999,7 +1334,7 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
   }
 
   await emitEvent(
-    makeEvent("extract", `提炼候选：得到 ${candidates.length} 个可能的游戏。`, {
+    makeEvent("extract", `提炼候选：得到 ${candidates.length} 个候选。`, {
       candidates: candidates.slice(0, 12).map((c) => ({ name: c.name, evidenceCount: c.evidence.length })),
     }),
   );
@@ -1009,7 +1344,8 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
       runId,
       events,
       candidates: [],
-      warnings: [...warnings, "没有提炼出可靠候选：可以尝试加“平台/年份/玩法关键词”。"],
+      targetKind,
+      warnings: [...warnings, "没有提炼出可靠候选：可以尝试加“平台/年份/特征关键词”。"],
     };
     setCache(cacheKey, result, 1000 * 60 * 3);
     return result;
@@ -1031,17 +1367,35 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
   const preSorted = sortCandidates(candidates);
   await emitCandidates(preSorted);
 
-  const preKeep = preSorted.slice(0, Math.min(20, preSorted.length));
+  const entityKept = preSorted.filter((c) => candidateHasEntityEvidence(c, targetKind));
+  const entityDropped = preSorted.filter((c) => !candidateHasEntityEvidence(c, targetKind));
+
   await emitEvent(
-    makeEvent("filter", `第1关（粗筛）：先保留 Top ${preKeep.length} 继续深挖。`, {
-      kept: preKeep.map((c) => ({ id: c.id, name: c.name, score: c.score })),
-      dropped: preSorted.slice(preKeep.length).map((c) => ({ id: c.id, name: c.name, score: c.score })),
+    makeEvent("filter", `第1关（本体校验）：只保留“更像目标本体”的候选（${entityKept.length} 个）。`, {
+      kept: entityKept.map((c) => ({ id: c.id, name: c.name, score: c.score })),
+      dropped: entityDropped.map((c) => ({ id: c.id, name: c.name, score: c.score })),
     }),
   );
 
+  if (entityKept.length < opts.topK) {
+    const msg = `严格模式：只找到 ${entityKept.length} 个带“本体页证据”的候选（不会用内容标题凑数）。建议你补充更具体线索再试一次。`;
+    warnings.push(msg);
+    await hooks?.onWarning?.(msg);
+  }
+
+  const preKeep = entityKept.slice(0, Math.min(20, entityKept.length));
+  await emitEvent(
+    makeEvent("filter", `第2关（粗筛）：先保留 Top ${preKeep.length} 继续深挖。`, {
+      kept: preKeep.map((c) => ({ id: c.id, name: c.name, score: c.score })),
+      dropped: entityKept.slice(preKeep.length).map((c) => ({ id: c.id, name: c.name, score: c.score })),
+    }),
+  );
+
+  let activeCandidates = preKeep;
+
   // 4.5) 证据补全（可选）：用户在意“手机平台”等信息时，补搜证据再让大模型打分
   if (useOpenAI && opts.enrichEvidence && wantsMobileEvidence(input.query, input.clues)) {
-    const targets = preKeep.slice(0, 8);
+    const targets = activeCandidates.slice(0, 8);
     const concurrency = 3;
     let idx = 0;
 
@@ -1058,14 +1412,14 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
 
         const name = clampText(current.name, 80);
         const queries: Array<{ q: string; tag: string }> = [];
-        if (!hasIos) queries.push({ q: `${name} iOS App Store game`, tag: "iOS" });
-        if (!hasGp) queries.push({ q: `${name} Android Google Play game`, tag: "Android" });
+        if (!hasIos) queries.push({ q: `${name} iOS App Store`, tag: "iOS" });
+        if (!hasGp) queries.push({ q: `${name} Android Google Play`, tag: "Android" });
 
         for (const { q, tag } of queries.slice(0, 2)) {
           try {
             await emitEvent(makeEvent("search", `补证据搜索（${tag}）：${clampText(q, 120)}`));
             const hits = await searchProvider.search({
-              apiKey: tavilyKey,
+              apiKey: searchApiKey,
               query: q,
               maxResults: 5,
               searchDepth: "basic",
@@ -1098,7 +1452,7 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
   }
 
   // 5) 用 OpenAI 做“解释型打分”（可选）
-  let finalCandidates = preSorted;
+  let finalCandidates = activeCandidates;
   if (useOpenAI) {
     const scored = await scoreWithOpenAI({
       apiKey: openaiKey,
@@ -1106,7 +1460,8 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
       baseUrl: openaiBaseUrl,
       query: input.query,
       clues: input.clues,
-      candidates: preKeep,
+      candidates: activeCandidates,
+      targetKind,
     });
 
     const map = new Map(scored.map((s) => [normalizeCandidateKey(s.name), s]));
@@ -1117,18 +1472,18 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
       c.scoreBreakdown = sanitizeScoreBreakdown(c, s.scoreBreakdown ?? []);
     }
 
-    await emitEvent(makeEvent("score", "第2关（解释型打分）：根据线索 + 证据链接重新排序。"));
+    await emitEvent(makeEvent("score", "第3关（解释型打分）：根据线索 + 证据链接重新排序。"));
   } else {
-    await emitEvent(makeEvent("score", "第2关（简单打分）：未启用大模型，本次只用关键词规则排序。"));
+    await emitEvent(makeEvent("score", "第3关（简单打分）：未启用大模型，本次只用关键词规则排序。"));
   }
 
   finalCandidates = sortCandidates(finalCandidates);
-  await emitCandidates(finalCandidates);
+  await emitCandidates(sortCandidates(candidates));
 
   const topK = finalCandidates.slice(0, opts.topK);
 
   await emitEvent(
-    makeEvent("filter", `第3关（收敛）：保留 Top ${opts.topK} 进入扭蛋。`, {
+    makeEvent("filter", `第4关（收敛）：保留 Top ${topK.length} 进入扭蛋。`, {
       kept: topK.map((c) => ({ id: c.id, name: c.name, score: c.score })),
       dropped: finalCandidates.slice(opts.topK).map((c) => ({ id: c.id, name: c.name, score: c.score })),
     }),
@@ -1142,16 +1497,16 @@ export async function runRecall(input: RecallRequest, hooks?: RecallHooks): Prom
 
   // Top5 图片尽量用“网页自带的封面图”，而不是随机图/域名图标
   await enrichTopImages(topK, 8);
-  await emitCandidates(finalCandidates);
+  await emitCandidates(sortCandidates(candidates));
 
   // 6) 控制返回体大小
-  const output = finalCandidates.map((c) => ({
+  const output = sortCandidates(candidates).map((c) => ({
     ...c,
     evidence: c.evidence.slice(0, 5),
     scoreBreakdown: c.scoreBreakdown.slice(0, 5),
   }));
 
-  const result: RecallResponse = { runId, events, candidates: output, warnings: warnings.length ? warnings : undefined };
+  const result: RecallResponse = { runId, events, candidates: output, targetKind, warnings: warnings.length ? warnings : undefined };
   setCache(cacheKey, result, 1000 * 60 * 3);
   return result;
 }

@@ -14,7 +14,7 @@ export default function Results({ candidates, revealedIds }: ResultsProps) {
   return (
     <div className="flex flex-col gap-8 pb-20">
       <h2 className="text-3xl font-black text-center mb-4 text-transparent bg-clip-text bg-gradient-to-r from-indigo-500 to-violet-500">
-        FOUND MEMORIES
+        掉落结果
       </h2>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
@@ -44,7 +44,7 @@ export default function Results({ candidates, revealedIds }: ResultsProps) {
               ) : null}
               <div className="absolute bottom-4 left-4 right-4">
                 <div className="bg-indigo-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mb-1">
-                  RANK #{index + 1}
+                  TOP #{index + 1}
                 </div>
                 <h3 className="text-white font-bold text-sm leading-tight line-clamp-2">{game.name}</h3>
               </div>
@@ -56,7 +56,7 @@ export default function Results({ candidates, revealedIds }: ResultsProps) {
             <div className="p-4 flex-1 flex flex-col gap-4">
               <div>
                 <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">
-                  Score Analysis
+                  得分拆解
                 </h4>
                 <ul className="space-y-2">
                   {game.breakdown.slice(0, 5).map((item, i) => (
@@ -106,7 +106,7 @@ export default function Results({ candidates, revealedIds }: ResultsProps) {
 
               <div className="mt-auto pt-4 border-t border-zinc-100 dark:border-zinc-800">
                 <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">
-                  Verified Evidence
+                  证据来源
                 </h4>
                 <div className="flex flex-col gap-2">
                   {game.evidence.slice(0, 3).map((ev, i) => (

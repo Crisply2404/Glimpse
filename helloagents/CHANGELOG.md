@@ -17,6 +17,11 @@
 - 证据约束推理：解释型打分新增 `evidenceQuote`（非0分必须能点开看到原文片段，否则自动降为“证据不足”）
 - 搜索 Provider 可插拔入口：新增 `SEARCH_PROVIDER`（目前默认/仅支持 tavily，方便后续对比替换）
 - 回归测试：新增/扩展 `pipeline.test.ts`（mock Tavily/OpenAI，锁定“过滤视频榜单”和“不会额外追加搜索”）
+- 去“找游戏”痕迹：后端提示词与搜索词生成更通用，并自动识别目标类型（software/website/movie/book/game/product/unknown）
+- 严格候选=目标本体：Top 候选必须具备“本体页证据”（官网/商店页/Wikipedia/GitHub/npm 等），不再让网页标题混进 Top
+- 线索输入更直观：输入区改为字段式“高级条件（可选）”（一定包含/一定不包含/我记得在…）
+- 搜索源对照：新增 Brave Search provider、实验页 `/lab/tavily` 与 `/lab/brave`
+- 对照脚本：新增 `scripts/compare-providers.mjs`（Top1/Top5 命中率 + 内容标题占比）
 
 ### 修复
 - 类型检查不再扫描 `ref/`（避免把原型目录当成主项目源码）

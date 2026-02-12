@@ -19,6 +19,10 @@ import GachaMachine from "./GachaMachine";
 
 import type { RecallResponse } from "@/lib/types";
 
+type GlimpseAppProps = {
+  providerOverride?: "tavily" | "brave";
+};
+
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -135,7 +139,11 @@ function mergeCandidatesKeepingElimination(prev: UiCandidate[], next: UiCandidat
   });
 }
 
-export default function GlimpseApp() {
+function providerLabel(id: "tavily" | "brave") {
+  return id === "brave" ? "Brave" : "Tavily";
+}
+
+export default function GlimpseApp({ providerOverride }: GlimpseAppProps) {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [state, setState] = useState<SearchState>({
     isProcessing: false,
@@ -208,10 +216,13 @@ export default function GlimpseApp() {
         weight: c.strength,
       }));
 
+      const payloadOptions: any = { topK: 5, stages: 3, maxQueries: 5, maxSearchResultsPerQuery: 8, maxCandidates: 25 };
+      if (providerOverride) payloadOptions.provider = providerOverride;
+
       const payload = {
         query: description,
         clues: payloadClues,
-        options: { topK: 5, stages: 3, maxQueries: 5, maxSearchResultsPerQuery: 8, maxCandidates: 25 },
+        options: payloadOptions,
       };
 
       const replayFromResponse = async (res: RecallResponse) => {
@@ -224,6 +235,7 @@ export default function GlimpseApp() {
 
         const uiEvents: UiEvent[] = [];
         const events = res.events ?? [];
+        let reachedGacha = false;
 
         for (let i = 0; i < events.length; i++) {
           if (activeRunRef.current !== runToken) return;
@@ -254,7 +266,14 @@ export default function GlimpseApp() {
             };
           });
 
-          if (evt.phase === "gacha") break;
+          if (evt.phase === "gacha") {
+            reachedGacha = true;
+            break;
+          }
+        }
+
+        if (!reachedGacha) {
+          setState((prev) => ({ ...prev, isProcessing: false, currentPhase: "idle" }));
         }
       };
 
@@ -368,6 +387,11 @@ export default function GlimpseApp() {
                 ...prev,
                 warnings: msg.response.warnings ?? prev.warnings,
               }));
+
+              const hasGacha = (msg.response.events ?? []).some((e) => e.phase === "gacha");
+              if (!hasGacha) {
+                setState((prev) => ({ ...prev, isProcessing: false, currentPhase: "idle" }));
+              }
               continue;
             }
 
@@ -383,7 +407,7 @@ export default function GlimpseApp() {
         fail(message);
       }
     },
-    [state.isProcessing],
+    [state.isProcessing, providerOverride],
   );
 
   const rankedActiveCandidates = useMemo(() => {
@@ -409,8 +433,13 @@ export default function GlimpseApp() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10 space-y-12">
         <section className="text-center space-y-4">
           <h1 className="text-4xl md:text-6xl font-black tracking-tight">
-            Find the <span className="text-indigo-600 dark:text-indigo-400">Lost</span> In Your Mind
+            Glimpse <span className="text-indigo-600 dark:text-indigo-400">Demo</span>
           </h1>
+          {providerOverride ? (
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 text-zinc-600 dark:text-zinc-300">
+              实验页：{providerLabel(providerOverride)}
+            </div>
+          ) : null}
           <p className="text-zinc-500 dark:text-zinc-400 max-w-2xl mx-auto text-lg">
             输入模糊印象，我们会从全网找线索，把筛选过程演出来，最后用“扭蛋”掉出最可能的 Top 结果。
           </p>

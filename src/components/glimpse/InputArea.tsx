@@ -16,38 +16,46 @@ function randomId() {
 
 export default function InputArea({ onStart, onClear, isProcessing }: InputAreaProps) {
   const [description, setDescription] = useState("");
-  const [clues, setClues] = useState<Clue[]>([]);
-  const [newClueText, setNewClueText] = useState("");
-  const [newClueDirection, setNewClueDirection] = useState<ClueDirection>(ClueDirection.INCLUDE);
-  const [newClueStrength, setNewClueStrength] = useState(3);
+  const [mustInclude, setMustInclude] = useState("");
+  const [mustExclude, setMustExclude] = useState("");
+  const [remember, setRemember] = useState("");
 
-  const canReplay = useMemo(
-    () => clues.length > 0 && description.trim().length > 0,
-    [clues.length, description],
-  );
+  const canReplay = useMemo(() => {
+    const hasAdvanced = Boolean(mustInclude.trim() || mustExclude.trim() || remember.trim());
+    return description.trim().length > 0 && hasAdvanced;
+  }, [description, mustInclude, mustExclude, remember]);
 
-  function addClue() {
-    if (!newClueText.trim()) return;
-    const newClue: Clue = {
-      id: randomId(),
-      text: newClueText.trim(),
-      direction: newClueDirection,
-      strength: newClueStrength,
-    };
-    setClues((prev) => [...prev, newClue]);
-    setNewClueText("");
+  function splitClueText(input: string) {
+    return input
+      .split(/[\n,，;；、]+/g)
+      .map((t) => t.trim())
+      .filter(Boolean);
   }
 
-  function removeClue(id: string) {
-    setClues((prev) => prev.filter((c) => c.id !== id));
+  function buildClues(): Clue[] {
+    const includeTokens = splitClueText(mustInclude);
+    const excludeTokens = splitClueText(mustExclude);
+    const rememberText = remember.trim();
+
+    const out: Clue[] = [];
+    for (const t of includeTokens) {
+      out.push({ id: randomId(), text: t, direction: ClueDirection.INCLUDE, strength: 4 });
+    }
+    for (const t of excludeTokens) {
+      out.push({ id: randomId(), text: t, direction: ClueDirection.EXCLUDE, strength: 4 });
+    }
+    if (rememberText) {
+      out.push({ id: randomId(), text: rememberText, direction: ClueDirection.INCLUDE, strength: 3 });
+    }
+
+    return out.slice(0, 20);
   }
 
   function clearLocal() {
     setDescription("");
-    setClues([]);
-    setNewClueText("");
-    setNewClueDirection(ClueDirection.INCLUDE);
-    setNewClueStrength(3);
+    setMustInclude("");
+    setMustExclude("");
+    setRemember("");
     onClear();
   }
 
@@ -55,132 +63,75 @@ export default function InputArea({ onStart, onClear, isProcessing }: InputAreaP
     <div className="bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-sm">
       <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
         <i className="fa-solid fa-brain text-indigo-500"></i>
-        Initial Impressions
+        模糊印象
       </h2>
 
       <textarea
         className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl p-4 min-h-[120px] focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder:text-zinc-400"
-        placeholder="比如：像素风、俯视角、打怪升级、可能是PC上的独立游戏…"
+        placeholder="比如：我记得界面长这样/大概怎么用/在哪见过/什么时候见过…（越具体越好）"
         value={description}
         onChange={(e) => setDescription(e.target.value)}
         disabled={isProcessing}
       />
 
       <div className="mt-6">
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-zinc-500 mb-3">
-          Clue Management
-        </h3>
-        <div className="flex flex-wrap gap-2 mb-4">
-          {clues.map((clue) => (
-            <div
-              key={clue.id}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium border ${
-                clue.direction === ClueDirection.INCLUDE
-                  ? "bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-800 dark:text-green-400"
-                  : "bg-red-50 border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400"
-              }`}
-            >
-              <i
-                className={`fa-solid ${
-                  clue.direction === ClueDirection.INCLUDE ? "fa-plus" : "fa-minus"
-                } text-[10px]`}
-              ></i>
-              <span>{clue.text}</span>
-              <span className="opacity-60 text-[10px]">Lvl.{clue.strength}</span>
-              <button
-                onClick={() => removeClue(clue.id)}
-                className="hover:text-zinc-900 dark:hover:text-white transition-colors"
-                type="button"
-                disabled={isProcessing}
-              >
-                <i className="fa-solid fa-xmark"></i>
-              </button>
-            </div>
-          ))}
-          {clues.length === 0 ? (
-            <p className="text-sm text-zinc-400 italic">还没加线索也可以先试一把。</p>
-          ) : null}
-        </div>
+        <details className="bg-white/60 dark:bg-zinc-950/20 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4">
+          <summary className="cursor-pointer select-none text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+            高级条件（可选）
+            <span className="ml-2 text-xs font-normal text-zinc-400">
+              不填也能跑；填了会筛得更严
+            </span>
+          </summary>
 
-        <div className="flex flex-col md:flex-row gap-3 items-end md:items-center">
-          <div className="flex-1 w-full">
-            <input
-              type="text"
-              placeholder="加一条更具体的线索（平台/年份/玩法/画风）…"
-              className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-              value={newClueText}
-              onChange={(e) => setNewClueText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  addClue();
-                }
-              }}
-              disabled={isProcessing}
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="flex bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
-              <button
-                onClick={() => setNewClueDirection(ClueDirection.INCLUDE)}
-                className={`px-3 py-2 text-xs transition-colors ${
-                  newClueDirection === ClueDirection.INCLUDE
-                    ? "bg-green-500 text-white"
-                    : "hover:bg-zinc-100 dark:hover:bg-zinc-700"
-                }`}
-                type="button"
-                disabled={isProcessing}
-              >
-                Include
-              </button>
-              <button
-                onClick={() => setNewClueDirection(ClueDirection.EXCLUDE)}
-                className={`px-3 py-2 text-xs transition-colors ${
-                  newClueDirection === ClueDirection.EXCLUDE
-                    ? "bg-red-500 text-white"
-                    : "hover:bg-zinc-100 dark:hover:bg-zinc-700"
-                }`}
-                type="button"
-                disabled={isProcessing}
-              >
-                Exclude
-              </button>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-[10px] text-zinc-500 uppercase font-bold text-center">
-                Power: {newClueStrength}
-              </span>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-bold text-zinc-500">一定包含</label>
               <input
-                type="range"
-                min="1"
-                max="5"
-                value={newClueStrength}
-                onChange={(e) => setNewClueStrength(parseInt(e.target.value))}
-                className="w-24 accent-indigo-500"
+                type="text"
+                className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                placeholder="比如：重力/倾斜，液体，像素风（可用逗号分隔）"
+                value={mustInclude}
+                onChange={(e) => setMustInclude(e.target.value)}
                 disabled={isProcessing}
               />
             </div>
-            <button
-              onClick={addClue}
-              className="bg-zinc-800 dark:bg-zinc-200 text-white dark:text-zinc-900 rounded-lg px-4 py-2 text-sm font-bold hover:opacity-90 active:scale-95 transition-all disabled:opacity-50"
-              disabled={isProcessing}
-              type="button"
-            >
-              Add
-            </button>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-bold text-zinc-500">一定不包含</label>
+              <input
+                type="text"
+                className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                placeholder="比如：不是跑酷，不是恐怖（可用逗号分隔）"
+                value={mustExclude}
+                onChange={(e) => setMustExclude(e.target.value)}
+                disabled={isProcessing}
+              />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-bold text-zinc-500">我记得在…</label>
+              <input
+                type="text"
+                className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                placeholder="比如：2012 年左右 / 手机上 / iOS / 在地铁里玩过"
+                value={remember}
+                onChange={(e) => setRemember(e.target.value)}
+                disabled={isProcessing}
+              />
+            </div>
           </div>
-        </div>
+        </details>
       </div>
 
       <div className="mt-8 flex gap-3 border-t border-zinc-200 dark:border-zinc-800 pt-6">
         <button
-          onClick={() => onStart(description, clues)}
+          onClick={() => onStart(description, buildClues())}
           disabled={isProcessing || !description.trim()}
           className="flex-1 bg-indigo-600 text-white rounded-xl py-3 font-bold hover:bg-indigo-700 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/20"
           type="button"
         >
           <i className="fa-solid fa-magnifying-glass mr-2"></i>
-          Start Recovery
+          开始
         </button>
         <button
           onClick={clearLocal}
@@ -188,18 +139,17 @@ export default function InputArea({ onStart, onClear, isProcessing }: InputAreaP
           className="px-6 border border-zinc-200 dark:border-zinc-700 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
           type="button"
         >
-          Clear
+          清空
         </button>
         <button
-          onClick={() => onStart(description, clues)}
+          onClick={() => onStart(description, buildClues())}
           disabled={isProcessing || !canReplay}
           className="px-6 border border-zinc-200 dark:border-zinc-700 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
           type="button"
         >
-          Replay
+          再跑一次
         </button>
       </div>
     </div>
   );
 }
-

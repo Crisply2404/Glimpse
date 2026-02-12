@@ -1,21 +1,42 @@
-import type { TavilyHit, TavilySearchParams } from "@/lib/tavily";
 import { tavilySearch } from "@/lib/tavily";
+import { braveSearch } from "@/lib/brave";
 
-export type SearchProviderId = "tavily";
+export type SearchProviderId = "tavily" | "brave";
+
+export type SearchProviderSearchParams = {
+  apiKey: string;
+  query: string;
+  maxResults: number;
+  searchDepth?: "basic" | "advanced";
+  timeoutMs?: number;
+};
+
+export type SearchProviderHit = {
+  title: string;
+  url: string;
+  content: string;
+  score?: number;
+};
 
 export type SearchProvider = {
   id: SearchProviderId;
-  search: (params: TavilySearchParams) => Promise<TavilyHit[]>;
+  search: (params: SearchProviderSearchParams) => Promise<SearchProviderHit[]>;
 };
 
-export function getSearchProvider(): SearchProvider {
-  const raw = (process.env.SEARCH_PROVIDER ?? "").trim().toLowerCase();
-  const id: SearchProviderId = raw === "tavily" || raw === "" ? "tavily" : "tavily";
+function parseProviderId(raw: string): SearchProviderId | "" {
+  const v = raw.trim().toLowerCase();
+  if (v === "tavily") return "tavily";
+  if (v === "brave") return "brave";
+  return "";
+}
 
-  if (id === "tavily") {
-    return { id, search: tavilySearch };
+export function getSearchProvider(override?: SearchProviderId): SearchProvider {
+  const envId = parseProviderId(process.env.SEARCH_PROVIDER ?? "");
+  const id: SearchProviderId = override ?? (envId || "tavily");
+
+  if (id === "brave") {
+    return { id, search: braveSearch };
   }
 
   return { id: "tavily", search: tavilySearch };
 }
-

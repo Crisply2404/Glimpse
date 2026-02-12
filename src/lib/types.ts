@@ -6,12 +6,16 @@ export type Clue = {
   weight: number;
 };
 
+export type TargetKind = "software" | "website" | "movie" | "book" | "game" | "product" | "unknown";
+
 export type RecallOptions = {
   topK?: number;
   stages?: number;
   maxSearchResultsPerQuery?: number;
   maxQueries?: number;
   maxCandidates?: number;
+  /** 仅用于实验/对照：强制指定搜索源 */
+  provider?: "tavily" | "brave";
   /**
    * 是否对 Top 候选做“补证据”（例如补 App Store/Google Play）。
    * 默认 false：避免额外搜索次数太多。
@@ -73,5 +77,6 @@ export type RecallResponse = {
   runId: string;
   events: PipelineEvent[];
   candidates: Candidate[];
+  targetKind?: TargetKind;
   warnings?: string[];
 };

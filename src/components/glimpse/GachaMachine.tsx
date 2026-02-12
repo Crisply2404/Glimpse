@@ -18,6 +18,11 @@ export default function GachaMachine({
   const [isJumping, setIsJumping] = useState(false);
 
   useEffect(() => {
+    if (isRolling && totalToReveal === 0 && revealedCount === 0) {
+      onReveal();
+      return;
+    }
+
     if (isRolling && revealedCount < totalToReveal) {
       const timer = setInterval(() => {
         setIsJumping(true);
@@ -46,7 +51,7 @@ export default function GachaMachine({
               <div key={i} className="w-4 h-4 rounded-full bg-white"></div>
             ))}
           </div>
-          <i className="fa-solid fa-gamepad absolute text-4xl text-white/50 animate-pulse"></i>
+          <i className="fa-solid fa-magnifying-glass absolute text-4xl text-white/50 animate-pulse"></i>
         </div>
 
         {/* The Crank */}
@@ -77,10 +82,9 @@ export default function GachaMachine({
       <div className="mt-4 text-center">
         <p className="text-xs font-bold uppercase tracking-widest text-zinc-500">Gacha Reveal Engine</p>
         <p className="text-sm text-zinc-400">
-          {revealedCount} / {totalToReveal} Games Dropped
+          {revealedCount} / {totalToReveal} 已掉落
         </p>
       </div>
     </div>
   );
 }
-

@@ -14,6 +14,7 @@ describe("pipeline", () => {
 
   beforeEach(() => {
     process.env.TAVILY_API_KEY = "test-tavily";
+    process.env.BRAVE_API_KEY = "test-brave";
     process.env.OPENAI_API_KEY = "test-openai";
     process.env.OPENAI_MODEL = "test-model";
     delete process.env.OPENAI_BASE_URL;
@@ -63,6 +64,31 @@ describe("pipeline", () => {
           });
         }
 
+        if (q.includes("TEST_ENTITY_EVIDENCE")) {
+          return jsonOk({
+            results: [
+              {
+                title: "MysteryThing - it looks like this",
+                url: "https://example.com/blog/mysterything",
+                content: "This post describes MysteryThing but is not an official page.",
+                score: 0.7,
+              },
+              {
+                title: "RealThing - Wikipedia",
+                url: "https://en.wikipedia.org/wiki/RealThing",
+                content: "RealThing is a thing.",
+                score: 0.6,
+              },
+              {
+                title: "Help me find this thing?",
+                url: "https://example.com/help/find",
+                content: "Anyone know the name of this thing?",
+                score: 0.5,
+              },
+            ],
+          });
+        }
+
         return jsonOk({
           results: [
             {
@@ -99,9 +125,51 @@ describe("pipeline", () => {
         });
       }
 
+      if (url.includes("api.search.brave.com/res/v1/web/search")) {
+        const u = new URL(url);
+        const q = String(u.searchParams.get("q") ?? "");
+        if (q.includes("TEST_BRAVE_PROVIDER")) {
+          return jsonOk({
+            web: {
+              results: [
+                {
+                  title: "BraveThing - Wikipedia",
+                  url: "https://en.wikipedia.org/wiki/BraveThing",
+                  description: "BraveThing is a thing.",
+                },
+              ],
+            },
+          });
+        }
+
+        return jsonOk({
+          web: {
+            results: [
+              {
+                title: "Fallback - Wikipedia",
+                url: "https://en.wikipedia.org/wiki/Fallback",
+                description: "Fallback.",
+              },
+            ],
+          },
+        });
+      }
+
       if (url.endsWith("/v1/chat/completions")) {
         const body = init?.body ? JSON.parse(String(init.body)) : {};
         const system = String(body?.messages?.[0]?.content ?? "");
+
+        if (system.includes("分类助手")) {
+          return jsonOk({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({ targetKind: "game" }),
+                },
+              },
+            ],
+          });
+        }
 
         if (system.includes("搜索专家")) {
           return jsonOk({
@@ -298,5 +366,54 @@ describe("pipeline", () => {
 
     expect(res.events.some((e) => e.message.startsWith("补搜（"))).toBe(false);
     expect(res.events.some((e) => e.message.includes("补证据"))).toBe(false);
+  });
+
+  it("严格候选：没有本体页证据的不进入 Top（只当线索）", async () => {
+    process.env.OPENAI_API_KEY = "";
+
+    const res = await runRecall({
+      query: "TEST_ENTITY_EVIDENCE 我只记得大概长这样",
+      clues: [],
+      options: {
+        topK: 5,
+        maxQueries: 1,
+        maxSearchResultsPerQuery: 10,
+        maxCandidates: 25,
+        enrichEvidence: false,
+      },
+    });
+
+    const gateEvt = res.events.find((e) => e.message.includes("本体校验"));
+    expect(gateEvt).toBeTruthy();
+
+    const droppedNames = Array.isArray((gateEvt as any)?.payload?.dropped)
+      ? (gateEvt as any).payload.dropped.map((x: any) => String(x?.name ?? ""))
+      : [];
+
+    expect(droppedNames.some((n: string) => n.toLowerCase().includes("mysterything"))).toBe(true);
+  });
+
+  it("支持实验页强制 provider=brave（不会走 Tavily）", async () => {
+    process.env.OPENAI_API_KEY = "";
+
+    const res = await runRecall({
+      query: "TEST_BRAVE_PROVIDER",
+      clues: [],
+      options: {
+        topK: 5,
+        maxQueries: 1,
+        maxSearchResultsPerQuery: 5,
+        maxCandidates: 25,
+        provider: "brave",
+        enrichEvidence: false,
+      },
+    });
+
+    expect(res.events.length).toBeGreaterThan(0);
+
+    const fetchCalls = (globalThis.fetch as any).mock.calls as Array<[any, any]>;
+    const urls = fetchCalls.map(([input]) => String(typeof input === "string" ? input : input?.url ?? ""));
+    expect(urls.some((u) => u.includes("api.search.brave.com/res/v1/web/search"))).toBe(true);
+    expect(urls.some((u) => u.includes("api.tavily.com/search"))).toBe(false);
   });
 });
